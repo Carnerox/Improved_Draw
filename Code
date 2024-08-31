@@ -1,0 +1,156 @@
+//! zinc
+library ImprovedDraw requires UnitDex, TimerUtils, Math, GroupUtils, Snippet{
+
+	private{
+		constant integer    improvedDraw_UNIT_TYPE_ID        = 'hC02';
+		constant integer    improvedDraw_SHADOW_UNIT_ID      = 'h005';
+		constant integer    improvedDraw_RESEARCH_ID         = 'R000';
+	
+		constant real       improvedDraw_PROJECTILE_SPEED    = 1800.0;
+		constant real       improvedDraw_PROJECTILE_TIME     = 0.03;
+		constant real       improvedDraw_PROJECTILE_HEIGHT   = 50.0;
+		constant real       improvedDraw_PROJECTILE_DISTANCE = 1200.0;
+		constant real       improvedDraw_PROJECTILE_RADIUS   = 75.0;
+
+		constant damagetype improvedDraw_DAMAGE_TYPE         = DAMAGE_TYPE_DEATH;
+		constant attacktype improvedDraw_ATTACK_TYPE         = ATTACK_TYPE_PIERCE;
+		
+		constant string     improvedDraw_PROJECTILE_ART      = "Abilities\\Weapons\\BallistaMissile\\BallistaMissile.mdl";
+		constant string     improvedDraw_IMPACT_ART          = "Abilities\\Weapons\\BallistaMissile\\BallistaMissileTarget.mdl";
+	}
+
+	struct improvedDraw{
+		unit   unit     = null;
+		unit   shadow   = null;
+		effect effect   = null;
+		group  group    = null;
+		group  block    = null;
+		
+		real   damage   = 0.0;
+		real   sourceX  = 0.0;
+		real   sourceY  = 0.0;
+		real   targetX  = 0.0;
+		real   targetY  = 0.0;
+		real   angle    = 0.0;
+		real   distance = 0.0;
+		real   speed    = 0.0;
+
+		method destroy(){
+
+			DestroyEffect(this.effect);
+			RemoveUnit(this.shadow);
+			ReleaseGroup(this.group);
+			ReleaseGroup(this.block);
+			this.unit   = null;
+			this.effect = null;
+			this.shadow = null;
+			this.group  = null;
+			this.block  = null;
+		}
+	}
+
+
+	function onFilter() -> boolean{
+		unit    check = GetFilterUnit();
+		boolean flag  = false;
+		
+		if (IsUnitType(check, UNIT_TYPE_SAPPER) == true
+		&& snippet_IsUnitDead(check) == false){
+			flag = true;
+		}
+		check = null;
+		return flag;
+	}
+
+	function onTimer(){
+		timer    time   = GetExpiredTimer();
+		unit     target = null;
+		boolexpr check = Filter(function onFilter);
+		effect   impact;
+		real     currentX;
+		real     currentY;
+		real     newX;
+		real     newY;
+		
+		improvedDraw this = GetTimerData(time);
+
+		currentX = BlzGetLocalSpecialEffectX(this.effect);
+		currentY = BlzGetLocalSpecialEffectY(this.effect);
+		newX     = math_PolarProjectionX(currentX, this.speed, this.angle);
+		newY     = math_PolarProjectionY(currentY, this.speed, this.angle);
+		
+		BlzSetSpecialEffectPosition(this.effect, newX, newY, improvedDraw_PROJECTILE_HEIGHT);
+		SetUnitX(this.shadow, newX);
+		SetUnitY(this.shadow, newY);
+		GroupEnumUnitsInArea(this.group, newX, newY, improvedDraw_PROJECTILE_RADIUS, check);
+		target = FirstOfGroup(this.group);
+		
+		while (target != null){
+			if (IsUnitInGroup(target, this.block) == false){
+				UnitDamageTarget(this.unit, target, this.damage, true, false, improvedDraw_ATTACK_TYPE, improvedDraw_DAMAGE_TYPE, WEAPON_TYPE_WHOKNOWS);
+				impact = AddSpecialEffectTarget(improvedDraw_IMPACT_ART, target, "chest");
+				DestroyEffect(impact);
+			}
+			GroupRemoveUnit(this.group, target);
+			GroupAddUnit(this.block, target);
+			target = FirstOfGroup(this.group);
+		}
+
+		if (math_DistanceBetweenPoints(newX, newY, this.targetX, this.targetY) >= improvedDraw_PROJECTILE_DISTANCE){
+			this.destroy();
+			PauseTimer(time);
+			ReleaseTimer(time);
+		}
+
+		DestroyBoolExpr(check);
+		check  = null;
+		time   = null;
+		impact = null;
+	}
+
+	function onDamage(){
+		unit   source = GetEventDamageSource();
+		unit   target = BlzGetEventDamageTarget();
+		player owner  = GetOwningPlayer(source);
+		timer  time   = null;
+		
+		improvedDraw this;
+
+		if (GetUnitTypeId(source) == improvedDraw_UNIT_TYPE_ID
+		&& BlzGetEventDamageType() == DAMAGE_TYPE_NORMAL){
+			this = GetUnitId(source);
+
+			this.unit     = source;
+			this.damage   = GetEventDamage();
+			this.sourceX  = GetUnitX(source);
+			this.sourceY  = GetUnitY(source);
+			this.targetX  = GetUnitX(target);
+			this.targetY  = GetUnitY(target);
+			this.angle    = math_AngleBetweenPoints(this.sourceX, this.sourceY, this.targetX, this.targetY);
+			this.distance = math_DistanceBetweenPoints(this.sourceX, this.sourceY, this.targetX, this.targetY);
+			this.speed    = improvedDraw_PROJECTILE_SPEED * improvedDraw_PROJECTILE_TIME;
+			this.effect   = AddSpecialEffect(improvedDraw_PROJECTILE_ART, this.sourceX, this.sourceY); 
+			this.shadow   = CreateUnit(owner, improvedDraw_SHADOW_UNIT_ID, this.sourceX, this.sourceY, 0.0);
+			BlzSetSpecialEffectZ(this.effect, 50.0);
+			BlzSetSpecialEffectYaw(this.effect, (this.angle * 3.14) / 180.0);
+			this.group = NewGroup();
+			this.block = NewGroup();
+			time = NewTimer();
+			SetTimerData(time, this);
+			TimerStart(time, improvedDraw_PROJECTILE_TIME, true, function onTimer);
+			BlzSetEventDamage(0.0);
+		}
+
+		time = null;
+	}
+
+	function onInit(){
+		trigger trig = CreateTrigger();
+
+		TriggerRegisterAnyUnitEventBJ(trig, EVENT_PLAYER_UNIT_DAMAGED);
+    		TriggerAddAction(trig, function onDamage);
+	
+		trig = null;
+	}
+}
+//! endzinc
